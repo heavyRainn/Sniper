@@ -1,0 +1,5 @@
+pandas
+ta
+pybit
+python-dotenv
+numpy
