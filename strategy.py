@@ -25,6 +25,7 @@ class Signal:
     entry_price: float
     stop_loss: float
     take_profit: float
+    atr: float
     reason: str
 
 import logging
@@ -133,6 +134,7 @@ class TrendDivStrategy:
             entry_price=float(close),
             stop_loss=float(stop_loss),
             take_profit=float(take_profit),
+            atr=float(atr_val),
             reason="Bull trend + bull div RSI/CCI",
         )
 
@@ -173,5 +175,6 @@ class TrendDivStrategy:
             entry_price=float(close),
             stop_loss=float(stop_loss),
             take_profit=float(take_profit),
+            atr=float(atr_val),
             reason="Bear trend + bear div RSI/CCI",
         )

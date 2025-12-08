@@ -8,19 +8,17 @@ from typing import Deque
 
 import pandas as pd
 
+from bybit_client import BybitClient
 from config import (
     INTERVAL,
     ACCOUNT_EQUITY_VIRTUAL,
-    EQUITY_PCT_PER_TRADE,
-    DAILY_DD_LIMIT,
-    MIN_BARS,
-    MAX_QTY_PER_TRADE,
 )
-from bybit_client import BybitClient
+from config import MIN_BARS
 from logger_setup import setup_logger
+from risk import RiskManager
 from strategy import TrendDivStrategy
 from utils import round_step
-from config import MIN_BARS
+
 
 class TrendDivBot:
     def __init__(self):
@@ -28,17 +26,10 @@ class TrendDivBot:
         self.client = BybitClient()
         self.strategy = TrendDivStrategy()
 
+        self.risk = RiskManager(self.client, self.logger)
+
         self.bar_queue: Deque[pd.Series] = deque(maxlen=2000)
         self.last_bar_close: int | None = None
-
-        self.equity_start = self.client.get_equity()
-        self.daily_dd = 0.0
-
-    # ── DD / equity ─────────────────────────────────────────
-    def _update_dd(self):
-        eq_now = self.client.get_equity()
-        self.daily_dd = (eq_now - self.equity_start) / self.equity_start
-        self.logger.info("Session DD: %.2f%%", self.daily_dd * 100.0)
 
     # ── WebSocket callback ─────────────────────────────────
     def on_kline(self, msg: dict):
@@ -94,60 +85,44 @@ class TrendDivBot:
             .sort_index()
         )
 
+        signal = self.strategy.generate_signal(df)
+        if signal is None:
+            return
+
         # если уже есть позиция по инструменту — ничего не делаем
         if self.client.has_open_position():
             self.logger.info("Position already open, skip signals")
-            return
-
-        signal = self.strategy.generate_signal(df)
-        if signal is None:
             return
 
         self._maybe_open_position(signal)
 
     # ── открытие позиции ───────────────────────────────────
     def _maybe_open_position(self, signal):
-        # контроль дневной просадки
-        self._update_dd()
-        if self.daily_dd <= DAILY_DD_LIMIT:
-            self.logger.warning(
-                "Daily DD %.2f%% <= limit %.2f%% → не открываю новые позиции",
-                self.daily_dd * 100.0,
-                DAILY_DD_LIMIT * 100.0,
-            )
+        # 1) общий риск-контроль (лимит сделок/дневной DD и т.д.)
+        if not self.risk.can_open_trade():
             return
 
         price = signal.entry_price
         stop_loss = signal.stop_loss
         take_profit = signal.take_profit
 
-        per_unit_risk = abs(price - stop_loss)
-        if per_unit_risk <= 0:
-            self.logger.warning("per_unit_risk <= 0, skip")
+        # 2) sanity-check стопа относительно ATR
+        if not self.risk.validate_stop_vs_atr(price, stop_loss, signal.atr):
+            self.logger.info("Risk: stop/ATR validation failed → skip trade")
             return
 
-        risk_usd = ACCOUNT_EQUITY_VIRTUAL * EQUITY_PCT_PER_TRADE
-        qty = risk_usd / per_unit_risk
+        # 3) qty через risk manager
+        qty = self.risk.calc_qty(entry=price, stop=stop_loss)
         qty = round_step(qty, 0.001)
 
         if qty <= 0:
             self.logger.warning("Qty=0, skip")
             return
-        if qty > MAX_QTY_PER_TRADE:
-            self.logger.warning(
-                "Qty %.6f > MAX_QTY_PER_TRADE %.6f → режу до лимита",
-                qty, MAX_QTY_PER_TRADE
-            )
-            qty = MAX_QTY_PER_TRADE
 
         self.logger.info(
             "SIGNAL %s | entry=%.6f SL=%.6f TP=%.6f qty=%.6f reason=%s",
             signal.side.upper(),
-            price,
-            stop_loss,
-            take_profit,
-            qty,
-            signal.reason,
+            price, stop_loss, take_profit, qty, signal.reason,
         )
 
         self.client.place_market_order(
@@ -156,6 +131,8 @@ class TrendDivBot:
             stop_loss=stop_loss,
             take_profit=take_profit,
         )
+
+        self.risk.register_trade_open()
 
     def warmup_history(self):
         """
