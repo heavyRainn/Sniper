@@ -6,16 +6,14 @@ from datetime import datetime, timezone, date
 from typing import Optional
 
 from config import (
-    ACCOUNT_EQUITY_VIRTUAL,
     EQUITY_PCT_PER_TRADE,
     DAILY_DD_LIMIT,
     MAX_QTY_PER_TRADE,
 )
 
-# Доп. ограничения (можешь вынести в config позже)
 MAX_TRADES_PER_DAY = 3
-MIN_STOP_DISTANCE_MULT = 0.2   # минимальная дистанция стопа = 0.2 * ATR (защита от микростопов)
-MAX_STOP_DISTANCE_MULT = 5.0   # не лезем, если стоп слишком огромный относительно ATR
+MIN_STOP_DISTANCE_MULT = 0.2
+MAX_STOP_DISTANCE_MULT = 5.0
 
 
 @dataclass
@@ -26,15 +24,6 @@ class DayState:
 
 
 class RiskManager:
-    """
-    Отвечает за:
-    - дневной лимит просадки (от реального equity на бирже)
-    - лимит количества сделок в день
-    - расчёт размера позиции по риску
-    - жёсткий потолок qty
-    - sanity-check стопа относительно ATR (защита от странных сигналов)
-    """
-
     def __init__(self, bybit_client, logger):
         self.client = bybit_client
         self.logger = logger
@@ -43,21 +32,31 @@ class RiskManager:
     def _today_utc(self) -> date:
         return datetime.now(timezone.utc).date()
 
+    def _get_equity_safe(self) -> float:
+        """
+        Берём реальный equity с биржи.
+        Если API временно недоступен — fallback на виртуальный.
+        """
+        try:
+            return float(self.client.get_equity())
+        except Exception as e:
+            self.logger.warning(
+                "Risk: get_equity failed, fallback to virtual equity %.2f | err=%s",
+                float(0), str(e)
+            )
+            return float(0)
+
     def _ensure_day_state(self):
         today = self._today_utc()
         if self.state is None or self.state.day != today:
-            eq = self.client.get_equity()
+            eq = self._get_equity_safe()
             self.state = DayState(day=today, equity_start=eq, trades=0)
             self.logger.info("Risk: new day state | day=%s | equity_start=%.2f", today, eq)
 
     def current_dd(self) -> float:
-        """
-        Текущая дневная просадка относительно equity_start сегодняшнего дня.
-        """
         self._ensure_day_state()
-        eq_now = self.client.get_equity()
-        dd = (eq_now - self.state.equity_start) / self.state.equity_start
-        return dd
+        eq_now = self._get_equity_safe()
+        return (eq_now - self.state.equity_start) / self.state.equity_start
 
     def can_open_trade(self) -> bool:
         self._ensure_day_state()
@@ -84,45 +83,34 @@ class RiskManager:
         self.state.trades += 1
 
     def validate_stop_vs_atr(self, entry: float, stop: float, atr: float) -> bool:
-        """
-        Базовая sanity-проверка:
-        - стоп не должен быть слишком близко к цене относительно ATR
-        - и не должен быть экстремально далеко
-        """
         if atr <= 0:
             return True
 
         dist = abs(entry - stop)
         if dist < MIN_STOP_DISTANCE_MULT * atr:
-            self.logger.info(
-                "Risk: stop too tight vs ATR | dist=%.8f atr=%.8f",
-                dist, atr
-            )
+            self.logger.info("Risk: stop too tight vs ATR | dist=%.8f atr=%.8f", dist, atr)
             return False
 
         if dist > MAX_STOP_DISTANCE_MULT * atr:
-            self.logger.info(
-                "Risk: stop too wide vs ATR | dist=%.8f atr=%.8f",
-                dist, atr
-            )
+            self.logger.info("Risk: stop too wide vs ATR | dist=%.8f atr=%.8f", dist, atr)
             return False
 
         return True
 
     def calc_qty(self, entry: float, stop: float) -> float:
         """
-        Расчёт размера позиции:
-        риск $ = виртуальный equity * EQUITY_PCT_PER_TRADE
-        qty = риск$ / расстояние до стопа
+        Риск на сделку = (реальный equity) * EQUITY_PCT_PER_TRADE
+        qty = risk$ / |entry-stop|
         """
         per_unit_risk = abs(entry - stop)
         if per_unit_risk <= 0:
             return 0.0
 
-        risk_usd = ACCOUNT_EQUITY_VIRTUAL * EQUITY_PCT_PER_TRADE
+        equity_now = self._get_equity_safe()              # ✅ весь баланс
+        risk_usd = equity_now * float(EQUITY_PCT_PER_TRADE)
+
         qty = risk_usd / per_unit_risk
 
-        # жёсткий потолок
         if qty > MAX_QTY_PER_TRADE:
             qty = MAX_QTY_PER_TRADE
 

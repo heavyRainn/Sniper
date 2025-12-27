@@ -10,14 +10,13 @@ import pandas as pd
 
 from bybit_client import BybitClient
 from config import (
-    INTERVAL,
-    ACCOUNT_EQUITY_VIRTUAL,
+    INTERVAL
 )
 from config import MIN_BARS
 from logger_setup import setup_logger
 from risk import RiskManager
 from strategy import TrendDivStrategy
-from utils import round_step
+from trade_recorder import TradeRecorder
 
 
 class TrendDivBot:
@@ -30,6 +29,7 @@ class TrendDivBot:
 
         self.bar_queue: Deque[pd.Series] = deque(maxlen=2000)
         self.last_bar_close: int | None = None
+        self.trades = TradeRecorder("logs/trades.csv")
 
     # ── WebSocket callback ─────────────────────────────────
     def on_kline(self, msg: dict):
@@ -98,22 +98,22 @@ class TrendDivBot:
 
     # ── открытие позиции ───────────────────────────────────
     def _maybe_open_position(self, signal):
-        # 1) общий риск-контроль (лимит сделок/дневной DD и т.д.)
+        # 1) общий риск-контроль
         if not self.risk.can_open_trade():
             return
 
-        price = signal.entry_price
-        stop_loss = signal.stop_loss
-        take_profit = signal.take_profit
+        price = float(signal.entry_price)
+        stop_loss = float(signal.stop_loss)
+        take_profit = float(signal.take_profit)
 
         # 2) sanity-check стопа относительно ATR
-        if not self.risk.validate_stop_vs_atr(price, stop_loss, signal.atr):
+        if not self.risk.validate_stop_vs_atr(price, stop_loss, float(signal.atr)):
             self.logger.info("Risk: stop/ATR validation failed → skip trade")
             return
 
-        # 3) qty через risk manager
+        # 3) qty через risk manager (risk-based)
         qty = self.risk.calc_qty(entry=price, stop=stop_loss)
-        qty = round_step(qty, 0.001)
+        qty = self.client.normalize_qty(qty)
 
         if qty <= 0:
             self.logger.warning("Qty=0, skip")
@@ -125,14 +125,56 @@ class TrendDivBot:
             price, stop_loss, take_profit, qty, signal.reason,
         )
 
-        self.client.place_market_order(
+        # 4) отправляем ордер
+        resp = self.client.place_market_order(
             side=signal.side,
             qty=qty,
             stop_loss=stop_loss,
             take_profit=take_profit,
         )
 
-        self.risk.register_trade_open()
+        # 5) пишем сделку в файл (в любом случае: успех/ошибка)
+        if resp is None:
+            self.trades.append({
+                "symbol": signal.symbol,
+                "side": signal.side,
+                "entry": price,
+                "sl": stop_loss,
+                "tp": take_profit,
+                "qty": qty,
+                "reason": signal.reason,
+                "retCode": "EXC",
+                "retMsg": "place_order exception/None",
+                "orderId": "",
+                "orderLinkId": "",
+            })
+            return
+
+        ret_code = resp.get("retCode", "")
+        ret_msg = resp.get("retMsg", "")
+        result = resp.get("result", {}) or {}
+        order_id = result.get("orderId", "")
+        order_link_id = result.get("orderLinkId", "")
+
+        self.trades.append({
+            "symbol": signal.symbol,
+            "side": signal.side,
+            "entry": price,
+            "sl": stop_loss,
+            "tp": take_profit,
+            "qty": qty,
+            "reason": signal.reason,
+            "retCode": ret_code,
+            "retMsg": ret_msg,
+            "orderId": order_id,
+            "orderLinkId": order_link_id,
+        })
+
+        # 6) увеличиваем счётчик сделок только если биржа приняла ордер
+        if ret_code == 0:
+            self.risk.register_trade_open()
+        else:
+            self.logger.warning("Order rejected | retCode=%s retMsg=%s", ret_code, ret_msg)
 
     def warmup_history(self):
         """
@@ -180,9 +222,9 @@ class TrendDivBot:
         self.warmup_history()
         self.client.subscribe_kline(INTERVAL, self.on_kline)
         self.logger.info(
-            "Trend+Div bot started on MAINNET | interval=%s | virt_equity=%.2f",
+            "Trend+Div bot started on MAINNET | interval=%s | balance=%.2f",
             INTERVAL,
-            ACCOUNT_EQUITY_VIRTUAL,
+            float(self.client.get_equity()),
         )
         try:
             while True:

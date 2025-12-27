@@ -122,7 +122,9 @@ class TrendDivStrategy:
         if not (bull_div_rsi and bull_div_cci):
             return None
 
-        stop_loss = low - ATR_STOP_K * atr_val
+        # p2 — второй swing low
+        stop_loss = float(p2) - ATR_STOP_K * float(atr_val)
+
         if stop_loss >= close:
             return None
 
@@ -163,7 +165,9 @@ class TrendDivStrategy:
         if not (bear_div_rsi and bear_div_cci):
             return None
 
-        stop_loss = high + ATR_STOP_K * atr_val
+        # p2 — второй swing high
+        stop_loss = float(p2) + ATR_STOP_K * float(atr_val)
+
         if stop_loss <= close:
             return None
 
