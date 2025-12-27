@@ -150,7 +150,7 @@ class TrendDivBot:
             })
             return
 
-        ret_code = resp.get("retCode", "")
+        ret_code = int(resp.get("retCode", -1))
         ret_msg = resp.get("retMsg", "")
         result = resp.get("result", {}) or {}
         order_id = result.get("orderId", "")

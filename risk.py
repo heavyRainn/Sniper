@@ -56,6 +56,8 @@ class RiskManager:
     def current_dd(self) -> float:
         self._ensure_day_state()
         eq_now = self._get_equity_safe()
+        if self.state.equity_start <= 0:
+            return 0.0
         return (eq_now - self.state.equity_start) / self.state.equity_start
 
     def can_open_trade(self) -> bool:

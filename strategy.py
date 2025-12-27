@@ -7,6 +7,7 @@ from typing import Optional, Literal
 import pandas as pd
 
 from config import (
+    PAIR,
     MIN_BARS,
     RSI_OVERSOLD,
     RSI_OVERBOUGHT,
@@ -21,6 +22,7 @@ from utils import find_two_swings
 
 @dataclass
 class Signal:
+    symbol: str
     side: Literal["long", "short"]
     entry_price: float
     stop_loss: float
@@ -132,6 +134,7 @@ class TrendDivStrategy:
         take_profit = close + RR_TP * r_value
 
         return Signal(
+            symbol=PAIR,
             side="long",
             entry_price=float(close),
             stop_loss=float(stop_loss),
@@ -175,6 +178,7 @@ class TrendDivStrategy:
         take_profit = close - RR_TP * r_value
 
         return Signal(
+            symbol=PAIR,
             side="short",
             entry_price=float(close),
             stop_loss=float(stop_loss),
