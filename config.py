@@ -14,7 +14,7 @@ BYBIT_SECRET = os.getenv("BYBIT_SECRET")
 # --- Инструмент и биржа ---
 PAIR = "1000PEPEUSDT"
 CATEGORY = "linear"       # линейные USDT-перпеты
-INTERVAL = "1"           # kline интервал для WS: '1','3','5','15','30','60','240','D',...
+INTERVAL = "5"           # kline интервал для WS: '1','3','5','15','30','60','240','D',...
 
 # --- Риск / капитал ---
 EQUITY_PCT_PER_TRADE = 0.02     # 2% на сделку (≈0.4$ риска)
@@ -34,7 +34,7 @@ MIN_BARS = 300                  # минимум баров для нормал�
 ATR_STOP_K = 1.0                # стоп ≈ 0.4 * ATR
 RR_TP = 3.0                     # тейк = 2R
 
-RSI_OVERSOLD = 20
-RSI_OVERBOUGHT = 80
-CCI_OVERSOLD = -120
-CCI_OVERBOUGHT = 120
+RSI_OVERSOLD = 25
+RSI_OVERBOUGHT = 75
+CCI_OVERSOLD = -150
+CCI_OVERBOUGHT = 150

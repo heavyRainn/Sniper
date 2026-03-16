@@ -14,9 +14,9 @@ from pybit.unified_trading import HTTP
 # =========================
 CATEGORY = "linear"         # "linear" | "spot" | "inverse"
 SYMBOL = "1000PEPEUSDT"
-INTERVAL = "15"             # "15" для 15-минуток
+INTERVAL = "5"             # "15" для 15-минуток
 
-DAYS_BACK = 30              # месяц назад
+DAYS_BACK = 60              # месяц назад
 END_DT = datetime.now(timezone.utc)
 START_DT = END_DT - timedelta(days=DAYS_BACK)
 
